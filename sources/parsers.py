@@ -99,3 +99,36 @@ def parse_filing(path: Path) -> list[Section]:
     if suffix in {".htm", ".html"}:
         return parse_html_filing(path)
     raise ValueError(f"Unsupported filing format: {path.suffix}  (only .htm / .html are supported)")
+
+
+def merge_sections(sections: list[Section], min_chars: int = 150) -> list[Section]:
+    """Collapse duplicate/ToC echoes of the same Item into one canonical section.
+
+    Groups by Item/Part *number* (e.g. "Item 7"), not the full heading string, since
+    the same Item appears once as a bare stub in the ToC ("Item 7.") and once with its
+    real title before the prose ("Item 7. Management's Discussion..."). Within each
+    group, keeps the longest text and pairs it with whichever heading in the group has
+    an actual title (not just the bare item number). Drops anything still under
+    min_chars afterward -- almost always a section with no real body.
+    """
+    import re
+
+    groups: dict[str, list[Section]] = {}
+    order: list[str] = []
+    for s in sections:
+        m = re.match(r"^(Item\s+\d+[A-Z]?|Part\s+[IVX]+)", s.heading, re.IGNORECASE)
+        key = m.group(1).upper() if m else s.heading
+        if key not in groups:
+            order.append(key)
+            groups[key] = []
+        groups[key].append(s)
+
+    merged: list[Section] = []
+    for key in order:
+        group = groups[key]
+        best = max(group, key=lambda s: len(s.text))
+        titled = [s for s in group if s.heading.strip().upper() != key]
+        heading = max(titled, key=lambda s: len(s.heading)).heading if titled else best.heading
+        merged.append(Section(heading=heading, text=best.text))
+
+    return [s for s in merged if len(s.text) >= min_chars]
