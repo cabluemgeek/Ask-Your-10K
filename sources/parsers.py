@@ -110,8 +110,6 @@ def merge_sections(sections: list[Section], min_chars: int = 150) -> list[Sectio
     an actual title (not just the bare item number). Drops anything still under
     min_chars afterward -- almost always a section with no real body.
     """
-    import re
-
     groups: dict[str, list[Section]] = {}
     order: list[str] = []
     for s in sections:
