@@ -1,12 +1,13 @@
-"""CLI: download a filing, parse it, chunk it, embed it, and store it in Chroma.
+"""CLI: download all filings since a given year, parse each, chunk, embed, and
+store them in Chroma.
 
 Usage:
-    python ingest.py --ticker AAPL --form 10-K --year 2024
+    python ingest.py --ticker AAPL --form 10-K --year 2015
 
-Pipeline: download -> parse -> derive fiscal year from document -> merge
-sections -> chunk -> embed -> upsert into Chroma. Each chunk's metadata
-carries {ticker, form_type, fiscal_year, item, source_path} so the
-retriever/UI can show citations later.
+Pipeline (per filing found): download -> parse -> detect real fiscal year from
+the Cover Page -> merge sections -> chunk -> embed -> upsert into Chroma. Each
+chunk's metadata carries {ticker, form_type, fiscal_year, item, source_path}
+so the retriever/UI can show citations and filter by year later.
 """
 
 from __future__ import annotations
@@ -34,17 +35,15 @@ _FY_FROM_COVER_RE = re.compile(
 )
 
 
-def find_primary_html(files: list[Path]) -> Path | None:
-    """Pick the primary HTML document out of everything download_filing returned.
+def find_all_primary_html(files: list[Path]) -> list[Path]:
+    """Return every primary HTML document out of everything download_filing returned.
 
     sec_edgar_downloader saves full-submission.txt (raw SGML, not usable) alongside
-    primary-document.html (the real filing) in each accession folder. We only want
-    the .html ones.
+    primary-document.html (the real filing) in each accession folder. We want all
+    of the .html ones, one per filing, so multi-year ingestion covers every year.
     """
     html_files = [f for f in files if f.suffix.lower() in (".html", ".htm") and f.is_file()]
-    if not html_files:
-        return None
-    return sorted(html_files)[-1]
+    return sorted(html_files)
 
 
 def detect_fiscal_year(html_path: Path) -> int | None:
@@ -113,54 +112,62 @@ def chunk_sections(
     return documents
 
 
+def ingest_one(ticker: str, form_type: str, html_path: Path, index: int, total: int) -> int:
+    """Run the full parse -> chunk -> embed -> store pipeline for a single filing.
 
-def ingest(ticker: str, form_type: str, year: int | None) -> None:
-    print(f"[1/4] Downloading {form_type} for {ticker} (after {year})...")
-    files = download_filing(ticker, form_type, year)
-    print(f"      -> {len(files)} files/dirs found")
+    Returns the number of chunks stored for this filing.
+    """
+    print(f"  [{index}/{total}] {html_path}")
 
-    html_path = find_primary_html(files)
-    if html_path is None:
-        print("      !! No primary HTML document found. Nothing to parse.")
-        return
-    print(f"      -> using {html_path}")
+    fiscal_year = detect_fiscal_year(html_path)
+    if fiscal_year is None:
+        print("      !! could not detect fiscal year from cover page -- skipping this filing")
+        return 0
+    print(f"      -> fiscal year: {fiscal_year}")
 
-    # Pull the *real* fiscal year from the document so the citation is correct
-    # even when --year was used as a "after" filter. Falls back to the CLI value
-    # (which is just the year the user wants to start looking from).
-    doc_fy = detect_fiscal_year(html_path)
-    if doc_fy is not None:
-        fiscal_year = doc_fy
-        print(f"      -> fiscal year detected from cover page: {fiscal_year}")
-    else:
-        fiscal_year = year
-        print(f"      -> could not detect fiscal year from cover; using CLI value: {year}")
-
-    print("[2/4] Parsing...")
     raw_sections = parse_filing(html_path)
     sections = merge_sections(raw_sections)
     print(f"      -> {len(raw_sections)} raw sections -> {len(sections)} merged")
 
-    print("[3/4] Chunking...")
     documents = chunk_sections(sections, ticker, form_type, fiscal_year, html_path)
-    print(f"      -> {len(documents)} chunks (chunk_size={config.CHUNK_SIZE}, overlap={config.CHUNK_OVERLAP})")
+    print(f"      -> {len(documents)} chunks")
 
-    print("[4/4] Embedding + storing in Chroma (this may take a minute on first run)...")
     vectorstore = get_vectorstore()
     ids = [
         f"{ticker}-{form_type}-{fiscal_year}-{d.metadata['item']}-{d.metadata['chunk_index']}"
         for d in documents
     ]
     vectorstore.add_documents(documents, ids=ids)
-    print(f"      -> stored {len(documents)} chunks in collection '{config.COLLECTION_NAME}'")
-    print(f"      -> persisted to {config.CHROMA_DIR}")
+    print(f"      -> stored under fiscal_year={fiscal_year}")
+    return len(documents)
+
+
+def ingest(ticker: str, form_type: str, since_year: int | None) -> None:
+    print(f"[1/2] Downloading all {form_type} filings for {ticker} since {since_year}...")
+    files = download_filing(ticker, form_type, since_year)
+    print(f"      -> {len(files)} files/dirs found on disk")
+
+    html_paths = find_all_primary_html(files)
+    if not html_paths:
+        print("      !! No primary HTML documents found. Nothing to ingest.")
+        return
+    print(f"      -> {len(html_paths)} distinct filings to process")
+
+    print("[2/2] Processing each filing (parse -> chunk -> embed -> store)...")
+    total_chunks = 0
+    for i, html_path in enumerate(html_paths, start=1):
+        total_chunks += ingest_one(ticker, form_type, html_path, i, len(html_paths))
+
+    print()
+    print(f"Done. Stored {total_chunks} chunks across {len(html_paths)} filings in collection '{config.COLLECTION_NAME}'.")
+    print(f"Persisted to {config.CHROMA_DIR}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download, parse, chunk, embed, and store a SEC filing.")
+    parser = argparse.ArgumentParser(description="Download, parse, chunk, embed, and store all filings since a given year.")
     parser.add_argument("--ticker", required=True, help="e.g. AAPL")
     parser.add_argument("--form", required=True, help="e.g. 10-K")
-    parser.add_argument("--year", type=int, default=None, help="only filings after this year")
+    parser.add_argument("--year", type=int, default=None, help="download all filings after Jan 1 of this year")
     args = parser.parse_args()
     ingest(args.ticker, args.form, args.year)
 
