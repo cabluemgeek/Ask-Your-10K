@@ -25,11 +25,18 @@ Rules:
 - Every factual claim in your answer must be followed by a citation like [1], \
 [2], referring to the numbered context blocks below.
 - If multiple blocks support a claim, cite all of them, e.g. [1][3].
+- Always write out the full answer in complete sentences. Never respond with \
+only citation markers and no text.
 - If the answer is not contained in the provided context, respond exactly: \
 "I don't have enough information in the retrieved filings to answer that." \
 Do not fabricate an answer.
 - Be concise and precise. Prefer exact figures and dates from the filings \
 over paraphrased summaries.
+
+Example of correct output format:
+Question: What was the company's total revenue?
+Answer: Total revenue was $391,035 million [1], up from $383,285 million the \
+prior year [2].
 
 Context:
 {context}
