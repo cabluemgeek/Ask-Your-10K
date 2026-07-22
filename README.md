@@ -38,7 +38,7 @@ Generic chatbots will confidently answer financial questions with numbers they m
 
 ```bash
 # 1. Clone and set up the environment
-git clone <your-repo-url>
+git clone <https://github.com/cabluemgeek/Ask-Your-10K>
 cd ask-your-10-k
 python -m venv venv
 source venv/Scripts/activate   # Windows Git Bash; use venv/bin/activate on macOS/Linux
