@@ -3,14 +3,16 @@
 Usage:
     python ingest.py --ticker AAPL --form 10-K --year 2024
 
-Pipeline: download -> parse -> merge sections -> chunk -> embed -> upsert into
-Chroma. Each chunk's metadata carries {ticker, form_type, fiscal_year, item,
-source_path} so the retriever/UI can show citations later.
+Pipeline: download -> parse -> derive fiscal year from document -> merge
+sections -> chunk -> embed -> upsert into Chroma. Each chunk's metadata
+carries {ticker, form_type, fiscal_year, item, source_path} so the
+retriever/UI can show citations later.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -20,6 +22,16 @@ import config
 from store import get_vectorstore
 from sources.sec_client import download_filing
 from sources.parsers import parse_filing, merge_sections
+
+
+# Matches SEC 10-K cover-page language:
+#   "For the fiscal year ended September 27, 2025"
+#   "For the fiscal year ended December 31, 2024"
+# Some filings use "fiscal year" + month name; we capture the trailing 4-digit year.
+_FY_FROM_COVER_RE = re.compile(
+    r"for the fiscal year ended [A-Za-z]+ \d{1,2},?\s+(\d{4})",
+    re.IGNORECASE,
+)
 
 
 def find_primary_html(files: list[Path]) -> Path | None:
@@ -33,6 +45,24 @@ def find_primary_html(files: list[Path]) -> Path | None:
     if not html_files:
         return None
     return sorted(html_files)[-1]
+
+
+def detect_fiscal_year(html_path: Path) -> int | None:
+    """Read the first ~50 KB of the filing and look for the SEC cover-page year line.
+
+    Returns the actual fiscal year of the document, or None if not found.
+    """
+    try:
+        head = html_path.read_text(encoding="utf-8", errors="replace")[:50_000]
+    except OSError:
+        return None
+    m = _FY_FROM_COVER_RE.search(head)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
 
 
 def chunk_sections(
@@ -86,19 +116,29 @@ def ingest(ticker: str, form_type: str, year: int | None) -> None:
         return
     print(f"      -> using {html_path}")
 
+    # Pull the *real* fiscal year from the document so the citation is correct
+    # even when --year was used as a "after" filter. Falls back to the CLI value
+    # (which is just the year the user wants to start looking from).
+    doc_fy = detect_fiscal_year(html_path)
+    if doc_fy is not None:
+        fiscal_year = doc_fy
+        print(f"      -> fiscal year detected from cover page: {fiscal_year}")
+    else:
+        print(f"      -> could not detect fiscal year from cover; using CLI value: {year}")
+
     print("[2/4] Parsing...")
     raw_sections = parse_filing(html_path)
     sections = merge_sections(raw_sections)
     print(f"      -> {len(raw_sections)} raw sections -> {len(sections)} merged")
 
     print("[3/4] Chunking...")
-    documents = chunk_sections(sections, ticker, form_type, year, html_path)
+    documents = chunk_sections(sections, ticker, form_type, fiscal_year, html_path)
     print(f"      -> {len(documents)} chunks (chunk_size={config.CHUNK_SIZE}, overlap={config.CHUNK_OVERLAP})")
 
     print("[4/4] Embedding + storing in Chroma (this may take a minute on first run)...")
     vectorstore = get_vectorstore()
     ids = [
-        f"{ticker}-{form_type}-{year}-{d.metadata['item']}-{d.metadata['chunk_index']}"
+        f"{ticker}-{form_type}-{fiscal_year}-{d.metadata['item']}-{d.metadata['chunk_index']}"
         for d in documents
     ]
     vectorstore.add_documents(documents, ids=ids)

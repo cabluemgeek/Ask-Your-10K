@@ -2,7 +2,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-.venv/
+venv/
 
 # Project artefacts
 data/
@@ -10,6 +10,9 @@ chroma/
 
 # Secrets
 .env
+
+# Logs
+*.log
 
 # Editor / OS
 .vscode/

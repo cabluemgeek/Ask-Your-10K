@@ -7,9 +7,15 @@ the citation anchors in the UI ("Item 1A. Risk Factors", "Item 7. MD&A", etc.).
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from bs4 import BeautifulSoup
+
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+
+# SEC filings are iXBRL (XML). lxml parses them as HTML, which works but
+# emits a warning on every ingest. Filter it once at import time.
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 
 # Matches lines like:
@@ -85,8 +91,10 @@ def parse_html_filing(path: Path) -> list[Section]:
             current = Section(heading=_normalize_heading(m.group("head"), m.group("title")), text="")
             sections.append(current)
         else:
-            # Collapse internal whitespace before appending.
-            current.text += re.sub(r"\s+", " ", text) + " "
+            # Preserve paragraph boundaries: each block element starts a new paragraph
+            # in the chunkable text. Internal whitespace inside the paragraph is still
+            # collapsed to single spaces.
+            current.text += re.sub(r"[ \t]+", " ", text) + "\n\n"
 
     # Drop empty sections and trim trailing whitespace.
     return [Section(heading=s.heading, text=s.text.strip()) for s in sections if s.text.strip()]
