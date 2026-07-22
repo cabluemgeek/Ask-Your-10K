@@ -24,12 +24,12 @@ from sources.sec_client import download_filing
 from sources.parsers import parse_filing, merge_sections
 
 
-# Matches SEC 10-K cover-page language:
+# Matches SEC 10-K cover-page language, on the already-parsed (tag-stripped) text:
 #   "For the fiscal year ended September 27, 2025"
-#   "For the fiscal year ended December 31, 2024"
-# Some filings use "fiscal year" + month name; we capture the trailing 4-digit year.
+# Tolerant of non-breaking spaces (\xa0) and stray spaces before the comma,
+# both of which show up in real SEC filings and break naive whitespace matching.
 _FY_FROM_COVER_RE = re.compile(
-    r"for the fiscal year ended [A-Za-z]+ \d{1,2},?\s+(\d{4})",
+    r"for the fiscal year ended\s+[A-Za-z]+\s+\d{1,2}\s*,\s*(\d{4})",
     re.IGNORECASE,
 )
 
@@ -48,15 +48,24 @@ def find_primary_html(files: list[Path]) -> Path | None:
 
 
 def detect_fiscal_year(html_path: Path) -> int | None:
-    """Read the first ~50 KB of the filing and look for the SEC cover-page year line.
+    """Find the filing's real fiscal year from its parsed Cover Page section.
 
-    Returns the actual fiscal year of the document, or None if not found.
+    Searches the already-parsed, tag-stripped text (via parse_filing) rather than
+    raw HTML, since SEC's iXBRL tagging often splits the cover-page date across
+    nested tags that a raw-HTML regex won't match. Whitespace is normalized first
+    because SEC filings frequently use non-breaking spaces (\\xa0) here.
     """
     try:
-        head = html_path.read_text(encoding="utf-8", errors="replace")[:50_000]
-    except OSError:
+        sections = parse_filing(html_path)
+    except Exception:
         return None
-    m = _FY_FROM_COVER_RE.search(head)
+
+    cover = next((s for s in sections if s.heading == "Cover Page"), None)
+    if cover is None:
+        return None
+
+    normalized = cover.text.replace("\xa0", " ")
+    m = _FY_FROM_COVER_RE.search(normalized)
     if not m:
         return None
     try:
@@ -124,6 +133,7 @@ def ingest(ticker: str, form_type: str, year: int | None) -> None:
         fiscal_year = doc_fy
         print(f"      -> fiscal year detected from cover page: {fiscal_year}")
     else:
+        fiscal_year = year
         print(f"      -> could not detect fiscal year from cover; using CLI value: {year}")
 
     print("[2/4] Parsing...")
