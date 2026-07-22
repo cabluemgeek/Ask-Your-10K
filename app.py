@@ -36,6 +36,20 @@ st.set_page_config(
 def cached_vectorstore():
     return get_vectorstore()
 
+def get_available_years(ticker: str | None, form_type: str | None) -> list[int]:
+    """List the distinct fiscal years actually present in the store for this filter."""
+    vs = cached_vectorstore()
+    where: dict | None = None
+    conds = []
+    if ticker:
+        conds.append({"ticker": ticker})
+    if form_type:
+        conds.append({"form_type": form_type})
+    if conds:
+        where = conds[0] if len(conds) == 1 else {"$and": conds}
+    result = vs._collection.get(where=where, include=["metadatas"])  # type: ignore[attr-defined]
+    years = {m["fiscal_year"] for m in result["metadatas"] if m.get("fiscal_year")}
+    return sorted(years)
 
 def count_chunks(ticker: str | None, form_type: str | None, fiscal_year: int | None) -> int:
     """Count chunks in the store, optionally filtered by metadata."""
@@ -71,20 +85,31 @@ with st.sidebar:
 
     ticker = st.text_input("Ticker", value="AAPL", help="e.g. AAPL, MSFT, NVDA").upper().strip()
     form_type = st.selectbox("Form type", options=["10-K", "10-Q", "8-K"], index=0)
-    year = st.number_input(
-        "Fiscal year (after)",
+
+    download_since_year = st.number_input(
+        "Download filings since",
         min_value=2000,
         max_value=2030,
-        value=2024,
+        value=2015,
         step=1,
-        help="Only filings dated after January 1 of this year will be downloaded.",
+        help="Used only when ingesting: fetches every filing dated after January 1 of this year.",
     )
+
+    available_years = sorted(get_available_years(ticker or None, form_type), reverse=True)
+    year_options = ["All years"] + [str(y) for y in available_years]
+    selected_year_label = st.selectbox(
+        "Query fiscal year",
+        options=year_options,
+        index=0,
+        help="Restrict the chat to one fiscal year's filing, or search across all ingested years.",
+    )
+    query_year = None if selected_year_label == "All years" else int(selected_year_label)
 
     st.divider()
 
     # Show how many chunks are in the store for the current selection.
     try:
-        n = count_chunks(ticker or None, form_type, int(year))
+        n = count_chunks(ticker or None, form_type, query_year)
         st.metric("Chunks for this filter", n)
     except Exception as exc:
         st.warning(f"Could not query the store: {exc}")
@@ -92,7 +117,7 @@ with st.sidebar:
 
     if st.button("Ingest / re-ingest this filing", use_container_width=True):
         with st.spinner(f"Downloading + parsing + embedding {ticker} {form_type}..."):
-            log = trigger_ingest(ticker, form_type, int(year))
+            log = trigger_ingest(ticker, form_type, int(download_since_year))
         st.success("Done. Scroll down to ask a question.")
         with st.expander("Ingest log"):
             st.code(log, language="text")
@@ -140,7 +165,7 @@ if question := st.chat_input("e.g. What was total revenue in fiscal year 2025?")
                 question,
                 ticker=ticker or None,
                 form_type=form_type,
-                fiscal_year=int(year),
+                fiscal_year=query_year,
             )
         st.markdown(result["answer"])
 
