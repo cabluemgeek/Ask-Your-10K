@@ -27,6 +27,11 @@ Rules:
 - If multiple blocks support a claim, cite all of them, e.g. [1][3].
 - Always write out the full answer in complete sentences. Never respond with \
 only citation markers and no text.
+- If the context only partially answers the question (e.g. some figures are \
+present but a full breakdown/table is not), answer with what IS supported by \
+citations, and explicitly say which specific parts are not available in the \
+retrieved excerpts. Never invent a number to complete a pattern (e.g. a table \
+row) that isn't actually in the context.
 - If the answer is not contained in the provided context, respond exactly: \
 "I don't have enough information in the retrieved filings to answer that." \
 Do not fabricate an answer.

@@ -33,5 +33,5 @@ SEC_USER_AGENT = os.getenv(
 # --- Retrieval / chunking ---
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
-RETRIEVAL_K = 4
+RETRIEVAL_K = 6
 COLLECTION_NAME = "filings"
